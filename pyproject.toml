@@ -1,0 +1,15 @@
+[project]
+name = "multilevel-table"
+version = "0.1.0"
+description = "Interactive multilevel-header table widget for Marimo with merge/split."
+requires-python = ">=3.11"
+dependencies = ["anywidget>=0.9"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["multilevel_table"]
+# The static/ JS and CSS live inside the package directory, so hatchling
+# includes them in the wheel automatically — no extra configuration needed.
