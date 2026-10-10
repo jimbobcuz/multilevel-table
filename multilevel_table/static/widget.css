@@ -137,6 +137,8 @@
   text-overflow: ellipsis;
 }
 
+.mlt-note { padding: 12px 16px; color: var(--mlt-lvl1); }
+
 .mlt-empty::after { content: "\00B7"; color: var(--mlt-line-strong); }
 .mlt-bad { color: #b42318; font-weight: 600; }
 

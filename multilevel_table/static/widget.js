@@ -143,6 +143,13 @@ function render({ model, el: root }) {
 
     const colDepth = colGrid.depth, C = colGrid.leafCount;
     const rowDepth = rowGrid.depth, R = rowGrid.leafCount;
+    if (!C || !R || !colDepth || !rowDepth) {        // repeat(0, …) is invalid CSS
+      const note = el("div", "mlt-note");
+      note.textContent = "No rows or columns to show.";
+      scroll.replaceChildren(note);
+      cellNodes = [];
+      return;
+    }
 
     const grid = el("div", "mlt-grid");
     grid.style.gridTemplateColumns =
