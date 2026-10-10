@@ -1,19 +1,14 @@
 """
-Tests for the MultilevelTable widget — Python side only.
+Tests for the MultilevelTable widget (v2) — Python side.
 
-These exercise initialisation, content calculation, the JS→Python message
-handler (called directly, since there's no live comm in tests), and the
-programmatic merge/split/relabel API.
+Browser actions are simulated by assigning the two-way traits
+(`col_merged`, `selected`) exactly as `model.set` + `save_changes` would.
 """
 
 import pytest
 from multilevel_table.header import H
 from multilevel_table.widget import MultilevelTable
 
-
-# ---------------------------------------------------------------------------
-# Fixtures
-# ---------------------------------------------------------------------------
 
 def make_row_headers():
     return H("Division", [
@@ -33,9 +28,7 @@ def make_row_headers():
                 H("Basic", key="prod_basic"),
                 H("Pro",   key="prod_pro"),
             ], key="productivity"),
-            H("Security", [
-                H("Shield", key="shield"),
-            ], key="security"),
+            H("Security", [H("Shield", key="shield")], key="security"),
         ], key="software"),
     ], key="division")
 
@@ -53,62 +46,85 @@ def make_col_headers():
     ], key="region")
 
 
-def count_calc(row_path, col_path):
-    """Deterministic value from the leaf keys — easy to assert against."""
+def label_calc(row_path, col_path):
     return f"{row_path[-1]}|{col_path[-1]}"
 
 
 @pytest.fixture
-def widget():
-    return MultilevelTable(
-        row_headers=make_row_headers(),
-        col_headers=make_col_headers(),
-        calculate=count_calc,
-    )
+def table():
+    return MultilevelTable(make_row_headers(), make_col_headers(), label_calc)
 
 
 # ---------------------------------------------------------------------------
-# Initialisation
+# Initial state
 # ---------------------------------------------------------------------------
 
 class TestInit:
 
-    def test_grids_populated(self, widget):
-        assert widget.col_grid["depth"] == 4
-        assert widget.col_grid["leafCount"] == 8
-        assert widget.row_grid["depth"] == 4
-        assert widget.row_grid["leafCount"] == 8
+    def test_grids_and_shape(self, table):
+        assert table.col_grid["leafCount"] == 8
+        assert table.row_grid["leafCount"] == 8
+        assert len(table.data) == 8 and all(len(r) == 8 for r in table.data)
 
-    def test_data_shape(self, widget):
-        # 8 row-leaves × 8 col-leaves
-        assert len(widget.data) == 8
-        assert all(len(row) == 8 for row in widget.data)
+    def test_paths(self, table):
+        assert table.row_paths[0] == ["division", "hardware", "laptops", "pro_13"]
+        assert table.col_paths[0] == ["region", "emea", "uk", "uk_rev"]
 
-    def test_data_values_from_calculate(self, widget):
-        # First row leaf is pro_13; first col leaf is uk_rev
-        assert widget.data[0][0] == "pro_13|uk_rev"
-        # Last row leaf is shield; last col leaf is au_units
-        assert widget.data[7][7] == "shield|au_units"
+    def test_data_from_calculate(self, table):
+        assert table.data[0][0] == "pro_13|uk_rev"
+        assert table.data[7][7] == "shield|au_units"
 
-    def test_value_snapshot(self, widget):
-        assert widget.value["row_leaves"][0] == "pro_13"
-        assert widget.value["col_leaves"][-1] == "au_units"
-        assert widget.value["data"] == widget.data
+    def test_default_cell_size(self, table):
+        assert (table.cell_width, table.cell_height) == (96, 48)
 
-    def test_accepts_forest_list(self):
-        w = MultilevelTable(
-            row_headers=[make_row_headers()],   # list form
-            col_headers=make_col_headers(),     # single root form
-            calculate=count_calc,
-        )
-        assert w.row_grid["leafCount"] == 8
+    def test_custom_cell_size(self):
+        t = MultilevelTable(make_row_headers(), make_col_headers(), cell_width=120, cell_height=60)
+        assert (t.cell_width, t.cell_height) == (120, 60)
+
+    def test_nothing_merged_or_selected(self, table):
+        assert table.col_merged == []
+        assert table.selected is None
+
+    def test_row_cells_never_offer_merge(self, table):
+        assert all(not c["canMerge"] and not c["canSplit"] for c in table.row_grid["cells"])
+
+    def test_col_cells_offer_merge(self, table):
+        uk = next(c for c in table.col_grid["cells"] if c["key"] == "uk")
+        assert uk["canMerge"]
 
     def test_calculate_optional(self):
-        w = MultilevelTable(
-            row_headers=make_row_headers(),
-            col_headers=make_col_headers(),
-        )
-        assert w.data[0][0] is None
+        t = MultilevelTable(make_row_headers(), make_col_headers())
+        assert t.data[0][0] is None
+
+    def test_premerged_columns_reflected(self):
+        cols = make_col_headers()
+        cols.find("uk").merge()
+        t = MultilevelTable(make_row_headers(), cols)
+        assert t.col_merged == ["uk"]
+        assert t.col_grid["leafCount"] == 7
+
+
+# ---------------------------------------------------------------------------
+# Cell values
+# ---------------------------------------------------------------------------
+
+class TestCellValues:
+
+    def test_svg_strings_pass_through(self):
+        svg = "<svg viewBox='0 0 10 10'><rect width='10' height='10'/></svg>"
+        t = MultilevelTable(make_row_headers(), make_col_headers(), lambda r, c: svg)
+        assert t.data[0][0] == svg
+
+    def test_numbers_pass_through(self):
+        t = MultilevelTable(make_row_headers(), make_col_headers(), lambda r, c: 3.5)
+        assert t.data[0][0] == 3.5
+
+    def test_other_objects_stringified(self):
+        class Thing:
+            def __str__(self):
+                return "thing"
+        t = MultilevelTable(make_row_headers(), make_col_headers(), lambda r, c: Thing())
+        assert t.data[0][0] == "thing"
 
 
 # ---------------------------------------------------------------------------
@@ -117,107 +133,128 @@ class TestInit:
 
 class TestProgrammaticAPI:
 
-    def test_merge_updates_grid_and_data(self, widget):
-        widget.merge("laptops")
-        assert widget.col_grid["leafCount"] == 8   # cols unchanged
-        assert widget.row_grid["leafCount"] == 6   # rows: 8 - 3 + 1
-        assert len(widget.data) == 6
+    def test_merge_column(self, table):
+        table.merge("uk")
+        assert table.col_merged == ["uk"]
+        assert table.col_grid["leafCount"] == 7
+        assert table.data[0][0] == "pro_13|uk"
 
-    def test_merge_recalculates_for_merged_leaf(self, widget):
-        widget.merge("laptops")
-        # First row leaf is now 'laptops'; its path ends at the merged node
-        assert widget.data[0][0] == "laptops|uk_rev"
+    def test_split_column(self, table):
+        table.merge("uk")
+        table.split("uk")
+        assert table.col_merged == []
+        assert table.data[0][0] == "pro_13|uk_rev"
 
-    def test_split_restores(self, widget):
-        widget.merge("laptops")
-        widget.split("laptops")
-        assert widget.row_grid["leafCount"] == 8
-        assert widget.data[0][0] == "pro_13|uk_rev"
+    def test_merge_row_raises(self, table):
+        with pytest.raises(ValueError, match="row header"):
+            table.merge("laptops")
 
-    def test_relabel_updates_grid(self, widget):
-        widget.relabel("laptops", "All Laptops")
-        laptops = next(c for c in widget.row_grid["cells"] if c["key"] == "laptops")
-        assert laptops["label"] == "All Laptops"
+    def test_split_row_raises(self, table):
+        with pytest.raises(ValueError, match="row header"):
+            table.split("laptops")
 
-    def test_merge_col_side(self, widget):
-        widget.merge("uk")
-        assert widget.col_grid["leafCount"] == 7
-        assert all(len(row) == 7 for row in widget.data)
+    def test_rows_unchanged_by_column_merge(self, table):
+        table.merge("uk")
+        assert table.row_grid["leafCount"] == 8
 
-    def test_merge_invalid_raises(self, widget):
+    def test_invalid_merge_raises(self, table):
         with pytest.raises(ValueError):
-            widget.merge("hardware")   # children not yet leaves
+            table.merge("emea")
 
-    def test_unknown_key_raises(self, widget):
+    def test_unknown_key_raises(self, table):
         with pytest.raises(KeyError):
-            widget.merge("nonexistent")
+            table.merge("ghost")
 
-
-# ---------------------------------------------------------------------------
-# Message handling  (simulating JS → Python)
-# ---------------------------------------------------------------------------
-
-class TestMessageHandling:
-
-    def test_merge_message(self, widget):
-        widget._handle_msg(widget, {"op": "merge", "key": "laptops"}, [])
-        assert widget.row_grid["leafCount"] == 6
-
-    def test_split_message(self, widget):
-        widget._handle_msg(widget, {"op": "merge", "key": "laptops"}, [])
-        widget._handle_msg(widget, {"op": "split", "key": "laptops"}, [])
-        assert widget.row_grid["leafCount"] == 8
-
-    def test_relabel_message(self, widget):
-        widget._handle_msg(widget, {"op": "relabel", "key": "laptops", "label": "Notebooks"}, [])
-        laptops = next(c for c in widget.row_grid["cells"] if c["key"] == "laptops")
-        assert laptops["label"] == "Notebooks"
-
-    def test_invalid_merge_message_ignored(self, widget):
-        # Merging hardware (invalid) should not raise out of the handler
-        before = widget.row_grid["leafCount"]
-        widget._handle_msg(widget, {"op": "merge", "key": "hardware"}, [])
-        assert widget.row_grid["leafCount"] == before  # unchanged
-
-    def test_stale_key_message_ignored(self, widget):
-        before = widget.row_grid["leafCount"]
-        widget._handle_msg(widget, {"op": "merge", "key": "ghost"}, [])
-        assert widget.row_grid["leafCount"] == before
-
-    def test_value_updates_after_message(self, widget):
-        widget._handle_msg(widget, {"op": "merge", "key": "laptops"}, [])
-        assert widget.value["row_leaves"][0] == "laptops"
-        assert len(widget.value["data"]) == 6
-
-
-# ---------------------------------------------------------------------------
-# Full interaction sequence
-# ---------------------------------------------------------------------------
-
-class TestSequence:
-
-    def test_bottom_up_merge_to_single_cell(self, widget):
-        for key in ("laptops", "tablets"):
-            widget.merge(key)
-        widget.merge("hardware")
-        for key in ("productivity", "security"):
-            widget.merge(key)
-        widget.merge("software")
-        widget.merge("division")
-
-        assert widget.row_grid["leafCount"] == 1
-        assert len(widget.data) == 1
-        assert widget.data[0][0] == "division|uk_rev"
-
-    def test_merge_then_relabel_then_split(self, widget):
-        widget.merge("uk")
-        widget.relabel("uk", "United Kingdom")
-        uk = next(c for c in widget.col_grid["cells"] if c["key"] == "uk")
+    def test_relabel_column(self, table):
+        table.relabel("uk", "United Kingdom")
+        uk = next(c for c in table.col_grid["cells"] if c["key"] == "uk")
         assert uk["label"] == "United Kingdom"
-        assert uk["canSplit"] is True
 
-        widget.split("uk")
-        assert widget.col_grid["leafCount"] == 8
-        # Relabel persists on the node even after split
-        uk = next(c for c in widget.col_grid["cells"] if c["key"] == "uk")
-        assert uk["label"] == "United Kingdom"
+    def test_relabel_row(self, table):
+        table.relabel("laptops", "Notebooks")
+        cell = next(c for c in table.row_grid["cells"] if c["key"] == "laptops")
+        assert cell["label"] == "Notebooks"
+
+
+# ---------------------------------------------------------------------------
+# Browser-driven merges (col_merged trait)
+# ---------------------------------------------------------------------------
+
+class TestBrowserMerges:
+
+    def test_browser_merge(self, table):
+        table.col_merged = ["uk"]
+        assert table.col_grid["leafCount"] == 7
+        assert table.data[0][0] == "pro_13|uk"
+
+    def test_browser_split(self, table):
+        table.col_merged = ["uk"]
+        table.col_merged = []
+        assert table.col_grid["leafCount"] == 8
+
+    def test_invalid_merge_dropped_and_written_back(self, table):
+        table.col_merged = ["emea"]          # children not leaves yet
+        assert table.col_merged == []
+        assert table.col_grid["leafCount"] == 8
+
+    def test_unknown_key_dropped(self, table):
+        table.col_merged = ["ghost"]
+        assert table.col_merged == []
+
+    def test_row_key_dropped(self, table):
+        table.col_merged = ["laptops"]
+        assert table.col_merged == []
+        assert table.row_grid["leafCount"] == 8
+
+    def test_nested_merge_in_one_request(self, table):
+        # Deepest-first ordering lets a parent merge once its children have.
+        table.col_merged = ["uk", "germany", "emea"]
+        assert sorted(table.col_merged) == ["emea", "germany", "uk"]
+        assert table.col_grid["leafCount"] == 5   # EMEA + 4 APAC leaves
+
+    def test_split_parent_keeps_merged_children(self, table):
+        table.col_merged = ["uk", "germany", "emea"]
+        table.col_merged = ["uk", "germany"]
+        assert table.col_grid["leafCount"] == 6   # UK, Germany, 4 APAC
+
+
+# ---------------------------------------------------------------------------
+# Selection
+# ---------------------------------------------------------------------------
+
+class TestSelection:
+
+    def test_select_by_keys(self, table):
+        table.select("air", "de_units")
+        assert table.selected == {
+            "row": ["division", "hardware", "laptops", "air"],
+            "col": ["region", "emea", "germany", "de_units"],
+        }
+
+    def test_browser_select(self, table):
+        sel = {"row": table.row_paths[2], "col": table.col_paths[3]}
+        table.selected = sel
+        assert table.selected == sel
+
+    def test_clear(self, table):
+        table.select("air", "de_units")
+        table.clear_selection()
+        assert table.selected is None
+
+    def test_select_unknown_raises(self, table):
+        with pytest.raises(KeyError):
+            table.select("air", "ghost")
+
+    def test_stale_browser_selection_cleared(self, table):
+        table.selected = {"row": ["nope"], "col": ["nope"]}
+        assert table.selected is None
+
+    def test_selection_survives_unrelated_merge(self, table):
+        table.select("air", "jp_rev")
+        table.merge("uk")
+        assert table.selected["col"][-1] == "jp_rev"
+
+    def test_selection_cleared_when_its_column_merges(self, table):
+        table.select("air", "uk_rev")
+        table.merge("uk")
+        assert table.selected is None
