@@ -1,135 +1,144 @@
-@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap');
+/* MultilevelTable v2 — CSS Grid renderer.
+   No external font or network requests: IBM Plex is used if installed,
+   otherwise the system UI font. */
 
 .mlt-root {
+  --mlt-cell-w: 96px;          /* overridden from Python (cell_width)  */
+  --mlt-cell-h: 48px;          /* overridden from Python (cell_height) */
+
   --mlt-paper: #f7f5ef;
+  --mlt-paper-alt: #f1eee5;
   --mlt-ink: #20201d;
   --mlt-line: #d6d1c4;
   --mlt-line-strong: #b3ac99;
   --mlt-accent: #16706b;
-  --mlt-accent-soft: #d3e7e4;
+  --mlt-cream: #f3f0e7;
   --mlt-lvl0: #2b2a26;
   --mlt-lvl1: #56544b;
   --mlt-lvl2: #9c9683;
   --mlt-lvl3: #e4e0d4;
-  --mlt-cream: #f3f0e7;
 
-  font-family: 'IBM Plex Sans', ui-sans-serif, system-ui, sans-serif;
+  font-family: 'IBM Plex Sans', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif;
+  font-size: 12px;
   color: var(--mlt-ink);
-  background: var(--mlt-paper);
-  padding: 14px;
+}
+
+.mlt-scroll {
+  overflow: auto;
+  width: fit-content;          /* hug the grid instead of filling the page */
+  max-width: 100%;
+  max-height: 75vh;
   border: 1px solid var(--mlt-line-strong);
   border-radius: 4px;
+  background: var(--mlt-paper);
 }
 
-.mlt-scroll { overflow: auto; max-width: 100%; }
+/* position: relative makes the grid the offsetParent, so the sticky
+   offsets measured in JS are relative to the grid, not the page. */
+.mlt-grid { display: grid; width: max-content; position: relative; }
 
-.mlt-table {
-  border-collapse: separate;
-  border-spacing: 0;
-  font-size: 13px;
-  line-height: 1.2;
-}
-
-/* ── Header cells ──────────────────────────────────────────── */
-.mlt-h {
-  position: relative;
-  padding: 6px 9px;
-  text-align: left;
-  font-weight: 500;
-  letter-spacing: 0.01em;
+/* ── Shared cell chrome ─────────────────────────────────────── */
+.mlt-h, .mlt-cell, .mlt-corner {
+  box-sizing: border-box;
   border-right: 1px solid var(--mlt-line);
   border-bottom: 1px solid var(--mlt-line);
-  white-space: nowrap;
-  user-select: none;
-  vertical-align: middle;
+  min-width: 0;
 }
 
-.mlt-lvl-0 { background: var(--mlt-lvl0); color: var(--mlt-cream); font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; font-size: 11px; }
+/* ── Header cells ───────────────────────────────────────────── */
+.mlt-h {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 8px;
+  font-weight: 500;
+  line-height: 1.25;
+  user-select: none;
+}
+
+/* Column headers: centred, labels wrap onto several lines. */
+.mlt-h-col {
+  position: sticky;            /* top offset set per row in JS */
+  z-index: 2;
+  justify-content: center;
+  text-align: center;
+  white-space: normal;
+  overflow-wrap: break-word;
+  hyphens: auto;
+}
+.mlt-h-col .mlt-label { min-width: 0; }
+
+/* Row headers: one line, sized to content, pinned left. */
+.mlt-h-row {
+  position: sticky;            /* left offset set per column in JS */
+  z-index: 1;
+  white-space: nowrap;
+  padding: 0 10px;
+}
+
+.mlt-lvl-0 { background: var(--mlt-lvl0); color: var(--mlt-cream); font-weight: 600;
+             letter-spacing: 0.04em; text-transform: uppercase; font-size: 11px; }
 .mlt-lvl-1 { background: var(--mlt-lvl1); color: var(--mlt-cream); }
 .mlt-lvl-2 { background: var(--mlt-lvl2); color: var(--mlt-ink); }
 .mlt-lvl-3 { background: var(--mlt-lvl3); color: var(--mlt-ink); }
 
-.mlt-h-row { text-align: left; }
-.mlt-h-col { text-align: center; }
-.mlt-h-col .mlt-label { display: inline-block; }
-
-/* ── Interactive affordances ───────────────────────────────── */
-.mlt-mergeable, .mlt-splittable { cursor: pointer; transition: background-color 120ms ease, box-shadow 120ms ease; }
-.mlt-mergeable:hover, .mlt-splittable:hover { background: var(--mlt-accent); color: #fff; box-shadow: inset 0 0 0 2px rgba(255,255,255,0.25); }
-
-/* Merged (splittable) cells: persistent marker that they can be expanded */
-.mlt-splittable {
-  background-image: linear-gradient(135deg, transparent 0 calc(100% - 10px), var(--mlt-accent) calc(100% - 10px) 100%);
+/* Merge / split affordances (column headers only). */
+.mlt-mergeable, .mlt-splittable {
+  cursor: pointer;
+  transition: background-color 120ms ease, color 120ms ease;
 }
-.mlt-splittable.mlt-lvl-2, .mlt-splittable.mlt-lvl-3 { box-shadow: inset 2px 0 0 var(--mlt-accent); }
+.mlt-mergeable:hover, .mlt-splittable:hover { background: var(--mlt-accent); color: #fff; }
+.mlt-splittable { box-shadow: inset 0 3px 0 var(--mlt-accent); }
 
 .mlt-glyph {
+  flex: none;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 14px; height: 14px;
-  margin-left: 6px;
+  width: 14px;
+  height: 14px;
   border-radius: 2px;
-  font-family: 'IBM Plex Mono', monospace;
-  font-size: 12px; font-weight: 500;
-  background: rgba(0,0,0,0.10);
-  vertical-align: middle;
-}
-.mlt-mergeable:hover .mlt-glyph, .mlt-splittable:hover .mlt-glyph { background: rgba(255,255,255,0.30); }
-
-/* ── Rename affordance ─────────────────────────────────────── */
-.mlt-edit {
-  position: absolute;
-  top: 2px; right: 2px;
-  width: 16px; height: 16px;
-  padding: 0;
-  border: none;
-  border-radius: 2px;
-  background: transparent;
-  color: inherit;
-  opacity: 0;
-  cursor: pointer;
-  font-size: 10px;
-  line-height: 16px;
-  transition: opacity 100ms ease;
-}
-.mlt-h:hover .mlt-edit { opacity: 0.55; }
-.mlt-edit:hover { opacity: 1 !important; background: rgba(0,0,0,0.15); }
-
-.mlt-relabel {
-  font: inherit;
-  width: 8em;
-  max-width: 14em;
-  padding: 1px 4px;
-  border: 1px solid var(--mlt-accent);
-  border-radius: 2px;
-  background: #fff;
-  color: var(--mlt-ink);
-  outline: none;
-  box-shadow: 0 0 0 2px var(--mlt-accent-soft);
-}
-
-/* ── Corner ────────────────────────────────────────────────── */
-.mlt-corner {
-  background: var(--mlt-cream);
-  border-right: 1px solid var(--mlt-line-strong);
-  border-bottom: 1px solid var(--mlt-line-strong);
-}
-
-/* ── Data cells ────────────────────────────────────────────── */
-.mlt-cell {
   font-family: 'IBM Plex Mono', ui-monospace, monospace;
   font-size: 12px;
-  text-align: right;
-  padding: 5px 10px;
-  border-right: 1px solid var(--mlt-line);
-  border-bottom: 1px solid var(--mlt-line);
-  background: var(--mlt-paper);
-  white-space: nowrap;
+  background: rgba(0, 0, 0, 0.10);
 }
-.mlt-table tbody tr:nth-child(even) .mlt-cell { background: #f1eee5; }
-.mlt-empty { color: var(--mlt-line-strong); text-align: center; }
+.mlt-mergeable:hover .mlt-glyph, .mlt-splittable:hover .mlt-glyph { background: rgba(255, 255, 255, 0.3); }
 
-/* outer frame */
-.mlt-table thead tr:first-child th { border-top: 1px solid var(--mlt-line-strong); }
-.mlt-table th:first-child, .mlt-table td:first-child { border-left: 1px solid var(--mlt-line); }
+/* ── Corner ─────────────────────────────────────────────────── */
+.mlt-corner {
+  position: sticky;
+  top: 0;
+  left: 0;
+  z-index: 3;
+  background: var(--mlt-cream);
+  border-right-color: var(--mlt-line-strong);
+  border-bottom-color: var(--mlt-line-strong);
+}
+
+/* ── Data cells ─────────────────────────────────────────────── */
+.mlt-cell {
+  position: relative;
+  overflow: hidden;
+  padding: 0;
+  background: var(--mlt-paper);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.mlt-cell > svg { display: block; width: 100%; height: 100%; }
+
+.mlt-text {
+  font-family: 'IBM Plex Mono', ui-monospace, monospace;
+  font-size: 12px;
+  padding: 0 6px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.mlt-empty::after { content: "\00B7"; color: var(--mlt-line-strong); }
+.mlt-bad { color: #b42318; font-weight: 600; }
+
+.mlt-cell:hover { filter: brightness(0.97); }
+.mlt-selected { box-shadow: inset 0 0 0 2px var(--mlt-accent); z-index: 0; }

@@ -1,162 +1,211 @@
-// MultilevelTable frontend renderer.
+// MultilevelTable v2 renderer — a single CSS Grid.
 //
-// Pure renderer: consumes the serialised span grids (row_grid, col_grid) and
-// the data matrix from synced traitlets, builds an HTML <table>, and emits
-// merge / split / relabel intents via model.send(). All authoritative state
-// lives in Python; whenever Python pushes new grids we rebuild from scratch.
+// Python sends: col_grid, row_grid (span cells), row_paths, col_paths,
+// data (R x C values), cell_width, cell_height.
+// The browser sets only two traits: col_merged (merge/split) and selected.
+//
+// Grid layout (1-indexed lines):
+//   columns: [rowDepth header cols, max-content] [C data cols, cell_width]
+//   rows:    [colDepth header rows, auto]        [R data rows, cell_height]
 
-function depthLevel(cell, axis) {
-  // Hierarchy level (0 = root): grid row for col headers, grid col for row headers.
-  return axis === "col" ? cell.row : cell.col;
+const SVG_NS = "http://www.w3.org/2000/svg";
+
+function el(tag, cls) {
+  const e = document.createElement(tag);
+  if (cls) e.className = cls;
+  return e;
 }
 
-function makeHeaderCell(cell, axis, model, rerender) {
-  const th = document.createElement("th");
-  th.rowSpan = cell.rowspan;
-  th.colSpan = cell.colspan;
+function place(node, col, colspan, row, rowspan) {
+  node.style.gridColumn = `${col} / span ${colspan}`;
+  node.style.gridRow = `${row} / span ${rowspan}`;
+}
 
-  const level = Math.min(depthLevel(cell, axis), 3);
-  th.className = `mlt-h mlt-h-${axis} mlt-lvl-${level}`;
-  if (cell.canMerge) th.classList.add("mlt-mergeable");
-  if (cell.canSplit) th.classList.add("mlt-splittable");
-  if (cell.isLeaf) th.classList.add("mlt-leaf");
+function samePath(a, b) {
+  return Array.isArray(a) && Array.isArray(b) && a.length === b.length && a.every((k, i) => k === b[i]);
+}
 
-  const label = document.createElement("span");
-  label.className = "mlt-label";
+// ---------------------------------------------------------------------------
+// Cell content
+// ---------------------------------------------------------------------------
+
+function fillCell(td, value) {
+  if (value === null || value === undefined || value === "") {
+    td.classList.add("mlt-empty");
+    return;
+  }
+  if (typeof value === "string" && value.trimStart().startsWith("<svg")) {
+    // The XML parser needs the SVG namespace; add it if the author left it off.
+    let markup = value.trim();
+    if (!/^<svg[^>]*\sxmlns=/.test(markup)) markup = markup.replace(/^<svg/, `<svg xmlns="${SVG_NS}"`);
+    const doc = new DOMParser().parseFromString(markup, "image/svg+xml");
+    const root = doc.documentElement;
+    if (root && root.namespaceURI === SVG_NS && !doc.querySelector("parsererror")) {
+      td.appendChild(document.importNode(root, true));
+      return;
+    }
+    td.classList.add("mlt-bad");
+    td.title = "Invalid SVG";
+    td.textContent = "!";
+    return;
+  }
+  const span = el("span", "mlt-text");
+  span.textContent = String(value);
+  td.appendChild(span);
+}
+
+// ---------------------------------------------------------------------------
+// Headers
+// ---------------------------------------------------------------------------
+
+function headerCell(cell, axis) {
+  const level = Math.min(axis === "col" ? cell.row : cell.col, 3);
+  const h = el("div", `mlt-h mlt-h-${axis} mlt-lvl-${level}`);
+  h.dataset.key = cell.key;
+  if (cell.isLeaf) h.classList.add("mlt-leaf");
+
+  const label = el("span", "mlt-label");
   label.textContent = cell.label;
-  th.appendChild(label);
+  h.appendChild(label);
 
-  if (cell.canMerge || cell.canSplit) {
-    const glyph = document.createElement("span");
-    glyph.className = "mlt-glyph";
-    glyph.textContent = cell.canSplit ? "+" : "\u2013";
+  if (axis === "col" && (cell.canMerge || cell.canSplit)) {
+    h.classList.add(cell.canSplit ? "mlt-splittable" : "mlt-mergeable");
+    const glyph = el("span", "mlt-glyph");
+    glyph.textContent = cell.canSplit ? "+" : "–";
     glyph.setAttribute("aria-hidden", "true");
-    th.appendChild(glyph);
-    th.title = cell.canSplit ? "Click to split" : "Click to merge";
+    h.appendChild(glyph);
+    h.title = cell.canSplit ? `Split ${cell.label}` : `Merge ${cell.label}`;
   }
-
-  const edit = document.createElement("button");
-  edit.className = "mlt-edit";
-  edit.type = "button";
-  edit.textContent = "\u270E";
-  edit.title = "Rename";
-  edit.addEventListener("click", (e) => {
-    e.stopPropagation();
-    startRelabel(th, label, cell, model, rerender);
-  });
-  th.appendChild(edit);
-
-  if (cell.canMerge || cell.canSplit) {
-    th.addEventListener("click", () => {
-      const op = cell.canSplit ? "split" : "merge";
-      model.send({ op, key: cell.key });
-    });
-  }
-
-  return th;
+  return h;
 }
 
-function startRelabel(th, labelEl, cell, model, rerender) {
-  const current = cell.label;
-  const input = document.createElement("input");
-  input.className = "mlt-relabel";
-  input.value = current;
-  labelEl.replaceWith(input);
-  input.focus();
-  input.select();
+// ---------------------------------------------------------------------------
+// Render
+// ---------------------------------------------------------------------------
 
-  let done = false;
-  const finish = (commit) => {
-    if (done) return;
-    done = true;
-    const next = input.value.trim();
-    if (commit && next && next !== current) {
-      model.send({ op: "relabel", key: cell.key, label: next });
-    } else {
-      rerender();
-    }
-  };
+function render({ model, el: root }) {
+  root.classList.add("mlt-root");
+  const scroll = el("div", "mlt-scroll");
+  root.appendChild(scroll);
 
-  input.addEventListener("blur", () => finish(true));
-  input.addEventListener("keydown", (e) => {
-    if (e.key === "Enter") { e.preventDefault(); finish(true); }
-    else if (e.key === "Escape") { e.preventDefault(); finish(false); }
-  });
-  input.addEventListener("click", (e) => e.stopPropagation());
-}
+  let cellNodes = [];   // [r][c] -> div, for cheap selection updates
 
-function buildTable(model, rerender) {
-  const colGrid = model.get("col_grid");
-  const rowGrid = model.get("row_grid");
-  const data = model.get("data");
-
-  const colDepth = colGrid.depth;
-  const colLeaves = colGrid.leafCount;
-  const rowDepth = rowGrid.depth;
-  const rowLeaves = rowGrid.leafCount;
-
-  const colByRow = Array.from({ length: colDepth }, () => []);
-  for (const c of colGrid.cells) colByRow[c.row].push(c);
-  colByRow.forEach((r) => r.sort((a, b) => a.col - b.col));
-
-  const rowByRow = Array.from({ length: rowLeaves }, () => []);
-  for (const c of rowGrid.cells) rowByRow[c.row].push(c);
-  rowByRow.forEach((r) => r.sort((a, b) => a.col - b.col));
-
-  const table = document.createElement("table");
-  table.className = "mlt-table";
-
-  const thead = document.createElement("thead");
-  for (let r = 0; r < colDepth; r++) {
-    const tr = document.createElement("tr");
-    if (r === 0) {
-      const corner = document.createElement("th");
-      corner.className = "mlt-corner";
-      corner.rowSpan = colDepth;
-      corner.colSpan = rowDepth;
-      tr.appendChild(corner);
-    }
-    for (const c of colByRow[r]) tr.appendChild(makeHeaderCell(c, "col", model, rerender));
-    thead.appendChild(tr);
+  function applySize() {
+    root.style.setProperty("--mlt-cell-w", `${model.get("cell_width")}px`);
+    root.style.setProperty("--mlt-cell-h", `${model.get("cell_height")}px`);
   }
-  table.appendChild(thead);
 
-  const tbody = document.createElement("tbody");
-  for (let dr = 0; dr < rowLeaves; dr++) {
-    const tr = document.createElement("tr");
-    for (const c of rowByRow[dr]) tr.appendChild(makeHeaderCell(c, "row", model, rerender));
-    for (let dc = 0; dc < colLeaves; dc++) {
-      const td = document.createElement("td");
-      td.className = "mlt-cell";
-      const v = data[dr] ? data[dr][dc] : null;
-      if (v === null || v === undefined || v === "") {
-        td.classList.add("mlt-empty");
-        td.textContent = "\u00B7";
-      } else {
-        td.textContent = String(v);
+  function toggleMerge(cell) {
+    const merged = new Set(model.get("col_merged") || []);
+    if (cell.canSplit) merged.delete(cell.key);
+    else if (cell.canMerge) merged.add(cell.key);
+    else return;
+    model.set("col_merged", [...merged]);
+    model.save_changes();
+  }
+
+  function selectCell(r, c) {
+    const rowPath = model.get("row_paths")[r];
+    const colPath = model.get("col_paths")[c];
+    const cur = model.get("selected");
+    const next = cur && samePath(cur.row, rowPath) && samePath(cur.col, colPath)
+      ? null
+      : { row: rowPath, col: colPath };
+    model.set("selected", next);
+    model.save_changes();
+  }
+
+  function paintSelection() {
+    const sel = model.get("selected");
+    const rowPaths = model.get("row_paths");
+    const colPaths = model.get("col_paths");
+    for (let r = 0; r < cellNodes.length; r++) {
+      const isRow = !!sel && samePath(sel.row, rowPaths[r]);
+      for (let c = 0; c < cellNodes[r].length; c++) {
+        cellNodes[r][c].classList.toggle("mlt-selected", isRow && samePath(sel.col, colPaths[c]));
       }
-      tr.appendChild(td);
     }
-    tbody.appendChild(tr);
-  }
-  table.appendChild(tbody);
-
-  return table;
-}
-
-function render({ model, el }) {
-  el.classList.add("mlt-root");
-
-  function rerender() {
-    el.replaceChildren();
-    const scroll = document.createElement("div");
-    scroll.className = "mlt-scroll";
-    scroll.appendChild(buildTable(model, rerender));
-    el.appendChild(scroll);
   }
 
-  model.on("change:row_grid change:col_grid change:data", rerender);
-  rerender();
+  // Sticky header rows/columns need cumulative offsets, otherwise every
+  // header row would stick at top:0 on top of the one above it.
+  function pinHeaders(grid) {
+    for (const h of grid.querySelectorAll(".mlt-h-col")) h.style.top = `${h.offsetTop}px`;
+    for (const h of grid.querySelectorAll(".mlt-h-row")) h.style.left = `${h.offsetLeft}px`;
+  }
+
+  function draw() {
+    applySize();
+    const colGrid = model.get("col_grid");
+    const rowGrid = model.get("row_grid");
+    const data = model.get("data") || [];
+    if (!colGrid || !colGrid.cells || !rowGrid || !rowGrid.cells) return;
+
+    const colDepth = colGrid.depth, C = colGrid.leafCount;
+    const rowDepth = rowGrid.depth, R = rowGrid.leafCount;
+
+    const grid = el("div", "mlt-grid");
+    grid.style.gridTemplateColumns =
+      `repeat(${rowDepth}, max-content) repeat(${C}, var(--mlt-cell-w))`;
+    grid.style.gridTemplateRows =
+      `repeat(${colDepth}, auto) repeat(${R}, var(--mlt-cell-h))`;
+
+    const frag = document.createDocumentFragment();
+
+    const corner = el("div", "mlt-corner");
+    place(corner, 1, rowDepth, 1, colDepth);
+    frag.appendChild(corner);
+
+    for (const cell of colGrid.cells) {
+      const h = headerCell(cell, "col");
+      place(h, rowDepth + cell.col + 1, cell.colspan, cell.row + 1, cell.rowspan);
+      if (cell.canMerge || cell.canSplit) h.addEventListener("click", () => toggleMerge(cell));
+      frag.appendChild(h);
+    }
+
+    for (const cell of rowGrid.cells) {
+      const h = headerCell(cell, "row");
+      place(h, cell.col + 1, cell.colspan, colDepth + cell.row + 1, cell.rowspan);
+      frag.appendChild(h);
+    }
+
+    cellNodes = [];
+    for (let r = 0; r < R; r++) {
+      const rowNodes = [];
+      for (let c = 0; c < C; c++) {
+        const d = el("div", "mlt-cell");
+        d.style.gridColumn = `${rowDepth + c + 1}`;
+        d.style.gridRow = `${colDepth + r + 1}`;
+        fillCell(d, data[r] ? data[r][c] : null);
+        d.addEventListener("click", () => selectCell(r, c));
+        rowNodes.push(d);
+        frag.appendChild(d);
+      }
+      cellNodes.push(rowNodes);
+    }
+
+    grid.appendChild(frag);
+    scroll.replaceChildren(grid);
+    paintSelection();
+    requestAnimationFrame(() => pinHeaders(grid));
+  }
+
+  // One sync changes several traits at once; coalesce them into one redraw.
+  let drawQueued = false;
+  function scheduleDraw() {
+    if (drawQueued) return;
+    drawQueued = true;
+    queueMicrotask(() => { drawQueued = false; draw(); });
+  }
+
+  model.on("change:col_grid change:row_grid change:data change:row_paths change:col_paths", scheduleDraw);
+  model.on("change:cell_width change:cell_height", () => {
+    applySize();
+    const grid = scroll.firstChild;
+    if (grid) requestAnimationFrame(() => pinHeaders(grid));
+  });
+  model.on("change:selected", paintSelection);
+  draw();
 }
 
 export default { render };
