@@ -18,7 +18,8 @@ import sys
 
 from playwright.sync_api import sync_playwright
 
-from multilevel_table import H, MultilevelTable
+from multilevel_table import MultilevelTable
+from multilevel_table.examples import example_calculate, example_headers
 
 STATIC = pathlib.Path(__file__).resolve().parents[1] / "multilevel_table" / "static"
 SYNCED = ["col_grid", "row_grid", "col_paths", "row_paths", "data",
@@ -26,41 +27,13 @@ SYNCED = ["col_grid", "row_grid", "col_paths", "row_paths", "data",
 
 
 def demo_table() -> MultilevelTable:
-    cols = H("Region", [
-        H("EMEA", [
-            H("United Kingdom", [H("Revenue", key="uk_rev"), H("Units", key="uk_units")], key="uk"),
-            H("Germany", [H("Revenue", key="de_rev"), H("Units", key="de_units")], key="germany"),
-        ], key="emea"),
-        H("APAC", [
-            H("Japan", [H("Revenue", key="jp_rev"), H("Units sold (thousands)", key="jp_units")], key="japan"),
-            H("Australia", [H("Revenue", key="au_rev"), H("Units", key="au_units")], key="australia"),
-        ], key="apac"),
-    ], key="region")
-    rows = H("Division", [
-        H("Hardware", [
-            H("Laptops", [H("Pro 13in", key="pro_13"), H("Pro 15in", key="pro_15"), H("Air", key="air")], key="laptops"),
-            H("Tablets", [H("Standard", key="tab_std"), H("Plus", key="tab_plus")], key="tablets"),
-        ], key="hardware"),
-        H("Software", [
-            H("Productivity", [H("Basic", key="prod_basic"), H("Pro", key="prod_pro")], key="productivity"),
-            H("Security", [H("Shield", key="shield")], key="security"),
-        ], key="software"),
-    ], key="division")
+    rows, cols = example_headers()
+    cols.find("jp_units").relabel("Units sold (thousands)")   # exercise label wrapping
 
     def calculate(row_path, col_path):
         if row_path[-1] == "shield":
-            return 42                      # exercise the text fallback
-        v = sum(len(k) for k in row_path) * 7 + sum(len(k) for k in col_path) * 13
-        hue = v % 360
-        if col_path[-1].endswith("units"):
-            h = 20 + v % 70
-            return (f"<svg viewBox='0 0 100 100' preserveAspectRatio='none'>"
-                    f"<rect width='100' height='100' fill='hsl({hue} 40% 93%)'/>"
-                    f"<rect x='35' y='{100 - h}' width='30' height='{h}' fill='hsl({hue} 60% 42%)'/></svg>")
-        r = 10 + v % 30
-        return (f"<svg viewBox='0 0 100 100'>"
-                f"<rect width='100' height='100' fill='hsl({hue} 35% 94%)'/>"
-                f"<circle cx='50' cy='50' r='{r}' fill='hsl({hue} 60% 45%)'/></svg>")
+            return 42                                          # exercise the text fallback
+        return example_calculate(row_path, col_path)
 
     return MultilevelTable(rows, cols, calculate)
 
@@ -74,7 +47,11 @@ const pending = {};
 window.__model = {
   get: k => state[k],
   set: (k, v) => { pending[k] = v; },
-  on: (evts, cb) => evts.split(/\\s+/).forEach(e => (handlers[e] ||= []).push(cb)),
+  // Strict like marimo's model: one event name per call, no space-separated lists.
+  on: (evt, cb) => {
+    if (/\\s/.test(evt)) throw new Error("model.on takes a single event name: " + evt);
+    (handlers[evt] ||= []).push(cb);
+  },
   save_changes: async () => {
     const changes = Object.assign({}, pending);
     for (const k in pending) delete pending[k];

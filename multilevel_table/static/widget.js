@@ -198,12 +198,15 @@ function render({ model, el: root }) {
     queueMicrotask(() => { drawQueued = false; draw(); });
   }
 
-  model.on("change:col_grid change:row_grid change:data change:row_paths change:col_paths", scheduleDraw);
-  model.on("change:cell_width change:cell_height", () => {
+  // One event name per model.on call: marimo's model does not accept the
+  // space-separated list that Backbone does.
+  const resize = () => {
     applySize();
     const grid = scroll.firstChild;
     if (grid) requestAnimationFrame(() => pinHeaders(grid));
-  });
+  };
+  for (const k of ["col_grid", "row_grid", "data", "row_paths", "col_paths"]) model.on(`change:${k}`, scheduleDraw);
+  for (const k of ["cell_width", "cell_height"]) model.on(`change:${k}`, resize);
   model.on("change:selected", paintSelection);
   draw();
 }

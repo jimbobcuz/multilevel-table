@@ -141,4 +141,11 @@
 .mlt-bad { color: #b42318; font-weight: 600; }
 
 .mlt-cell:hover { filter: brightness(0.97); }
-.mlt-selected { box-shadow: inset 0 0 0 2px var(--mlt-accent); z-index: 0; }
+/* Drawn on an overlay: a full-bleed SVG would paint over an inset shadow. */
+.mlt-selected::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border: 2px solid var(--mlt-accent);
+  pointer-events: none;
+}
