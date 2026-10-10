@@ -3,8 +3,8 @@
 # dependencies = ["marimo", "anywidget", "multilevel-table"]
 #
 # [tool.uv.sources]
-# # EDIT: point at your GitHub repo; pin a commit with rev = "<sha>" to avoid stale caches.
-# multilevel-table = { git = "https://github.com/YOUR_USERNAME/multilevel-table.git", branch = "main" }
+# # Pin a commit with rev = "<sha>" to avoid stale caches.
+# multilevel-table = { git = "https://github.com/jimbobcuz/multilevel-table.git", branch = "main" }
 # ///
 
 import marimo
