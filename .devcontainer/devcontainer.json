@@ -1,0 +1,12 @@
+{
+  "name": "multilevel-table",
+  "image": "mcr.microsoft.com/devcontainers/python:3.12",
+  "postCreateCommand": "pip install -e . && pip install marimo pytest playwright",
+  "forwardPorts": [2718],
+  "portsAttributes": {
+    "2718": { "label": "marimo", "onAutoForward": "openPreview" }
+  },
+  "customizations": {
+    "vscode": { "extensions": ["ms-python.python"] }
+  }
+}

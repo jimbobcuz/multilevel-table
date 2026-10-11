@@ -1,4 +1,4 @@
-#!/usr/bin/env -S uvx marimo edit --sandbox --no-token --no-skew-protection --watch --port 3007
+#!/usr/bin/env -S uvx marimo edit --sandbox --no-token --watch --port 3007
 # /// script
 # requires-python = ">=3.11"
 # dependencies = ["marimo", "anywidget", "multilevel-table"]
@@ -14,66 +14,37 @@
 import marimo
 
 __generated_with = "0.18.4"
-app = marimo.App()
+app = marimo.App(width="full")
 
 with app.setup:
     import marimo as mo
-    from multilevel_table import H, MultilevelTable
+    from multilevel_table import MultilevelTable
+    from multilevel_table.examples import example_calculate, example_headers
 
 
 @app.cell
 def _():
-    # Column hierarchy: Region > Territory > Country > Metric
-    col_headers = H("Region", [
-        H("EMEA", [
-            H("UK", [H("Revenue", key="uk_rev"), H("Units", key="uk_units")], key="uk"),
-            H("Germany", [H("Revenue", key="de_rev"), H("Units", key="de_units")], key="germany"),
-        ], key="emea"),
-        H("APAC", [
-            H("Japan", [H("Revenue", key="jp_rev"), H("Units", key="jp_units")], key="japan"),
-            H("Australia", [H("Revenue", key="au_rev"), H("Units", key="au_units")], key="australia"),
-        ], key="apac"),
-    ], key="region")
+    mo.md("""
+    # MultilevelTable
 
-    # Row hierarchy: Division > Category > Product > Variant
-    row_headers = H("Division", [
-        H("Hardware", [
-            H("Laptops", [
-                H("Pro 13in", key="pro_13"),
-                H("Pro 15in", key="pro_15"),
-                H("Air", key="air"),
-            ], key="laptops"),
-            H("Tablets", [H("Standard", key="tab_std"), H("Plus", key="tab_plus")], key="tablets"),
-        ], key="hardware"),
-        H("Software", [
-            H("Productivity", [H("Basic", key="prod_basic"), H("Pro", key="prod_pro")], key="productivity"),
-            H("Security", [H("Shield", key="shield")], key="security"),
-        ], key="software"),
-    ], key="division")
-    return col_headers, row_headers
+    Click a column header marked **–** to merge its children into it, or **+** to split it
+    again. Merged columns are recalculated. Click a tile to select it.
+    """)
+    return
 
 
 @app.cell
 def _():
-    # Content is calculated for whatever structure currently exists.
-    # Each path is a list of node keys from root to the current (possibly
-    # merged) leaf — so a merged cell's value reflects its collapsed state.
-    def calculate(row_path, col_path):
-        # Toy deterministic value; replace with a real model / query.
-        seed = sum(len(k) for k in row_path) * 7 + sum(len(k) for k in col_path) * 3
-        metric = col_path[-1]
-        if "units" in metric:
-            return seed % 90 + 10
-        return f"${(seed * 137) % 9000 + 1000:,}"
-    return (calculate,)
-
-
-@app.cell
-def _(calculate, col_headers, row_headers):
+    # Replace example_headers / example_calculate with your own:
+    #   row_headers, col_headers = H(...), H(...)
+    #   def calculate(row_path, col_path) -> "<svg ...>...</svg>" | number | text
+    row_headers, col_headers = example_headers()
     table = MultilevelTable(
-        row_headers=row_headers,
-        col_headers=col_headers,
-        calculate=calculate,
+        row_headers,
+        col_headers,
+        example_calculate,
+        cell_width=96,
+        cell_height=48,
     )
     widget = mo.ui.anywidget(table)
     widget
@@ -82,13 +53,14 @@ def _(calculate, col_headers, row_headers):
 
 @app.cell
 def _(widget):
-    # Reactive: this cell re-runs whenever a merge/split/relabel happens.
+    # Re-runs whenever the table changes. widget.value holds every synced trait.
+    _sel = widget.value["selected"]
     mo.md(f"""
-    **Current structure**
+    **Merged columns:** {", ".join(widget.value["col_merged"]) or "none"}
 
-    - Row leaves: `{widget.value['row_leaves']}`
-    - Column leaves: `{widget.value['col_leaves']}`
-    - Grid: {len(widget.value['row_leaves'])} × {len(widget.value['col_leaves'])}
+    **Grid:** {len(widget.value["row_paths"])} rows × {len(widget.value["col_paths"])} columns
+
+    **Selected cell:** {" › ".join(_sel["row"]) + "  ×  " + " › ".join(_sel["col"]) if _sel else "none"}
     """)
     return
 

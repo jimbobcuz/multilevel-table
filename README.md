@@ -1,322 +1,190 @@
 # MultilevelTable
 
-An interactive table widget for [Marimo](https://marimo.io) (built on
-[anywidget](https://anywidget.dev)) with **multilevel row and column headers**.
-The defining feature is structural editing: you click a header to **merge** its
-children up into it, or **split** it back out, and the table's contents are
-recalculated for whatever structure results.
+An [anywidget](https://anywidget.dev) for [marimo](https://marimo.io): a grid of
+uniform SVG tiles under a **mergeable column hierarchy**, with a fixed
+hierarchy of row headers down the left.
 
-![demo](demo-screenshot.png)
+Click a column group to **merge** its children into one column; click it again
+to **split** them back out. Every tile is drawn by a `calculate(row_path,
+col_path)` function you supply, so merged columns are recalculated as one
+summary. Click a tile to select it; the selection is available to downstream
+marimo cells.
 
----
-
-## Contents
-
-- [What it does](#what-it-does)
-- [Quick look (no install)](#quick-look-no-install)
-- [Install](#install)
-- [Run the Marimo demo](#run-the-marimo-demo)
-- [Use it in your own notebook](#use-it-in-your-own-notebook)
-- [The merge / split model](#the-merge--split-model)
-- [API reference](#api-reference)
-- [Architecture](#architecture)
-- [Running the tests](#running-the-tests)
-- [Project layout](#project-layout)
-- [Deeper documentation](#deeper-documentation)
-- [What's not built yet](#whats-not-built-yet)
+![MultilevelTable running in marimo with the United Kingdom column merged](demo-screenshot.png)
 
 ---
 
-## What it does
-
-A normal table has one row of column headers and one column of row headers.
-This widget has **trees** of headers on both axes. Leaf nodes line up with the
-actual data cells; interior nodes are groups that span their descendants.
-
-You interact with the structure directly:
-
-- **Merge** — click a group whose children are all leaves. It absorbs them and
-  becomes a single leaf. The grid loses rows/columns and recalculates.
-- **Split** — click a previously merged cell. Its children reappear. The grid
-  grows back and recalculates.
-- **Rename** — hover any header and click the ✎ to edit its label inline.
-
-Every cell value is produced by a function you supply, called with the
-root-to-leaf path of each cell. Because the path reflects the *current*
-structure, merged cells get recalculated automatically.
-
----
-
-## Quick look (no install)
-
-Open **`multilevel_table_demo.html`** in any browser — phone or desktop. It's a
-single self-contained file with no dependencies and no kernel. Click headers
-marked `–` to merge and `+` to split; hover and use ✎ to rename.
-
-This demo runs the real renderer (`widget.js` / `widget.css`) against a small
-in-browser stand-in for the Python backend, so what you see and click is the
-genuine front end.
-
----
-
-## Install
-
-You need Python 3.11+ and [`anywidget`](https://anywidget.dev) (installed
-automatically as a dependency).
-
-From the project root (the folder containing `pyproject.toml`):
-
-```bash
-pip install -e .
-```
-
-The `-e` (editable) install is recommended during development: changes to the
-Python or the `static/` files take effect without reinstalling.
-
-Verify it:
-
-```bash
-python -c "from multilevel_table import MultilevelTable; print('ok')"
-```
-
----
-
-## Run the Marimo demo
-
-`demo.py` is a runnable Marimo notebook wired to the development hierarchy. It
-declares its own dependencies inline (via the script metadata block) and points
-at this package as a local editable source, so [`uv`](https://docs.astral.sh/uv/)
-handles everything:
-
-```bash
-chmod +x demo.py
-./demo.py
-```
-
-That launches the Marimo editor in your browser. Cells do not auto-run — run the
-first cell (`cell_1`) and the rest follow. The notebook is launched with
-`--watch`, so edits to the package are picked up automatically; just re-run the
-affected cells.
-
-If you prefer to invoke it explicitly rather than via the shebang:
-
-```bash
-uvx marimo edit --sandbox demo.py
-```
-
----
-
-## Use it in your own notebook
+## Quick start
 
 ```python
-from multilevel_table import H, MultilevelTable
 import marimo as mo
+from multilevel_table import H, MultilevelTable
 
-# Build header trees with the H() shorthand: H(label, [children], key=...)
-col_headers = H("Region", [
+cols = H("Region", [
     H("EMEA", [
         H("UK", [H("Revenue", key="uk_rev"), H("Units", key="uk_units")], key="uk"),
         H("Germany", [H("Revenue", key="de_rev"), H("Units", key="de_units")], key="germany"),
     ], key="emea"),
-    H("APAC", [
-        H("Japan", [H("Revenue", key="jp_rev"), H("Units", key="jp_units")], key="japan"),
-    ], key="apac"),
 ], key="region")
 
-row_headers = H("Division", [
-    H("Hardware", [
-        H("Laptops", [H("Pro", key="pro"), H("Air", key="air")], key="laptops"),
-    ], key="hardware"),
+rows = H("Division", [
+    H("Hardware", [H("Laptops", key="laptops"), H("Tablets", key="tablets")], key="hardware"),
 ], key="division")
 
-# Cell values are computed from the root-to-leaf key paths.
 def calculate(row_path, col_path):
-    # row_path / col_path are lists of node keys, e.g.
-    #   ["division", "hardware", "laptops", "pro"]
-    #   ["region", "emea", "uk", "uk_rev"]
-    return f"{row_path[-1]}·{col_path[-1]}"
+    # row_path ["division", "hardware", "laptops"]
+    # col_path ["region", "emea", "uk", "uk_rev"]  — or ["region", "emea", "uk"] once UK is merged
+    return "<svg viewBox='0 0 96 48'><rect width='96' height='48' fill='#16706b'/></svg>"
 
-table = MultilevelTable(row_headers, col_headers, calculate=calculate)
-
-# Wrap for Marimo so it's reactive, then display it.
-widget = mo.ui.anywidget(table)
+table = MultilevelTable(rows, cols, calculate, cell_width=96, cell_height=48)
+widget = mo.ui.anywidget(table)   # wrap it so marimo tracks it
 widget
 ```
 
-In a later cell, read `widget.value` — it re-runs whenever the user merges,
-splits, or renames:
+In a later cell:
 
 ```python
-widget.value   # {"row_leaves": [...], "col_leaves": [...], "data": [[...]]}
+widget.value["col_merged"]   # ["uk"]
+widget.value["selected"]     # {"row": [...keys], "col": [...keys]} or None
 ```
 
-You can also drive the structure programmatically:
-
-```python
-table.merge("laptops")        # collapse Laptops' children into it
-table.split("laptops")        # expand them back
-table.relabel("laptops", "Notebooks")
-```
+`widget.value` is a dict of every synced trait, and any cell that reads it
+re-runs when the user merges, splits or selects.
 
 ---
 
-## The merge / split model
+## What the user can do
 
-Headers form a tree. A node is a **leaf** if it was created without children
-*or* if it has been merged.
+| Action | Where | Result |
+| --- | --- | --- |
+| Merge | Column header marked **–** | Its children collapse into one column; tiles recalculate |
+| Split | Column header marked **+** (accent bar on top) | Children reappear in the state they were in |
+| Select | Any tile | Tile is outlined; `selected` holds its row and column paths. Click again to clear |
 
-**Merge** is only valid on a node whose direct children are *all currently
-leaves*. This makes merges proceed **bottom-up**: you can't merge `Hardware`
-until both `Laptops` and `Tablets` beneath it are themselves leaves.
-
-```
-Division                          Division
-├── Hardware                      ├── Hardware  ← now mergeable
-│   ├── Laptops  ← merge these    │   ├── Laptops  (leaf)
-│   │   ├── Pro       first ──▶   │   └── Tablets  (leaf)
-│   │   └── Air                   └── Software
-│   └── Tablets (leaf)
-```
-
-**Split** reverses a merge exactly. A node remembers its children even while
-merged, so splitting restores them in whatever state they were last in (a split
-can reveal children that are themselves still merged).
-
-**Rename** has no structural constraints — any header, any time. It changes only
-the display label; the node's stable `key` never changes.
-
-A single-child merge is **count-neutral**: merging `Security → Shield` replaces
-one leaf (Shield) with another (Security), so the grid size is unchanged — but
-the contents still recalculate because the leaf identity changed.
+Row headers have no controls. Headers can't be renamed from the UI;
+`table.relabel(key, label)` does it from Python.
 
 ---
 
-## API reference
+## Merge rules
+
+A column node can be merged only when **all its direct children are currently
+leaves**, so merges go bottom-up: merge UK and Germany before EMEA. A merged
+node keeps its children, so splitting restores them exactly, including any that
+were themselves merged.
+
+---
+
+## Cell content
+
+`calculate(row_path, col_path)` is called once per tile on every change. Paths
+are lists of node keys from the root to the current leaf; a merged column's
+path stops at the merged node.
+
+| Return value | Shown as |
+| --- | --- |
+| A string starting with `<svg` | The SVG, filling the tile (the `xmlns` is added if you leave it off) |
+| A number or other text | Centred text |
+| `None` | A faint dot |
+| Anything else | `str(value)` as text |
+
+**Make the SVG fill the tile:** give it a `viewBox` with the tile's shape
+(`0 0 96 48` for the default size), or add `preserveAspectRatio='none'`. A
+square `viewBox` in a 2:1 tile is letterboxed, which is standard SVG behaviour.
+
+The SVG is inserted as trusted markup. Only return SVG your own code generates.
+
+---
+
+## API
 
 ### `H(label, children=None, *, key=None)`
 
-Shorthand builder for a header node.
+Builds a header node. Supply explicit `key`s; they appear in paths, in
+`col_merged`, and in `merge` / `split` calls.
 
-- `label` — display text.
-- `children` — list of child `H(...)` nodes; omit for a leaf.
-- `key` — stable identifier (keyword-only). If omitted, one is generated from
-  the label plus a short random suffix. **Supply explicit keys** wherever you
-  need to reference nodes later (in `calculate`, `merge`, etc.) or where two
-  siblings share a label.
+### `build_forest(fields)`
 
-### `MultilevelTable(row_headers, col_headers, calculate=None)`
+`from multilevel_table.fields import Field, build_forest` builds a regular
+cross-product hierarchy from a list of `Field(name, members, start_merged=False)`.
 
-- `row_headers`, `col_headers` — a single `H(...)` root or a list of roots.
-- `calculate(row_path, col_path) -> value` — called for every cell. Each path
-  is a list of node keys from root to the current leaf. If omitted, all cells
-  are `None`.
-
-Methods (also usable from a notebook cell):
+### `MultilevelTable(row_headers, col_headers, calculate=None, *, cell_width=96, cell_height=48)`
 
 | Method | Effect |
-|---|---|
-| `table.merge(key)` | Merge the node (raises if invalid). |
-| `table.split(key)` | Split the node (raises if invalid). |
-| `table.relabel(key, label)` | Rename the node. |
+| --- | --- |
+| `merge(key)` / `split(key)` | Merge or split a column header. Raises for row keys or invalid states |
+| `relabel(key, label)` | Rename any header |
+| `select(row_key, col_key)` | Select the tile at a row leaf and a column leaf |
+| `clear_selection()` | Clear the selection |
 
-Synced state (read these; Marimo observes them):
-
-| Attribute | Contents |
-|---|---|
-| `table.value` | `{row_leaves, col_leaves, data}` snapshot of current structure. |
-| `table.data` | The 2-D list of computed cell values. |
-| `table.row_grid` / `table.col_grid` | Serialised span grids (used by the front end). |
-
----
-
-## Architecture
-
-State lives in **Python**. The JavaScript layer is a pure renderer. The loop:
-
-```
-User clicks a header in the browser
-        │
-        ▼
-JS sends an intent  ──▶  {op: "merge", key: "laptops"}
-        │
-        ▼
-Python mutates the header tree, recomputes the span grids and the data matrix
-        │
-        ▼
-Synced traitlets update  ──▶  JS rebuilds the <table> from the new grids
-```
-
-Because JS never holds authoritative state, it can't drift out of sync — every
-change is a full rebuild from the Python-computed grids. Invalid or stale
-intents from the browser are ignored quietly; the next refresh re-aligns the
-view with Python's truth.
-
-The four code modules, in dependency order:
-
-1. **`header.py`** — the `HeaderNode` tree, the `merge` / `split` / `relabel`
-   operations and their validity rules, and forest-level helpers.
-2. **`spans.py`** — walks the current visible tree and computes the
-   `rowspan` / `colspan` and grid position of every header cell. Guarantees the
-   header area tiles perfectly (no gaps, no overlaps).
-3. **`widget.py`** — the anywidget class: traitlets, the JS→Python message
-   handler, the programmatic API, and the content-calculation pass.
-4. **`static/widget.js` + `static/widget.css`** — the renderer and styling.
+| Synced trait | Contents |
+| --- | --- |
+| `col_merged` | Keys of merged column nodes (the browser sets this) |
+| `selected` | `{"row": path, "col": path}` or `None` (the browser sets this) |
+| `row_paths`, `col_paths` | Paths of the current leaves, in display order |
+| `data` | `R × C` list of `calculate` results |
+| `cell_width`, `cell_height` | Tile size in pixels; change them live |
+| `col_grid`, `row_grid` | Header span cells, used by the renderer |
 
 ---
 
-## Running the tests
+## How it works
+
+Python owns all state. The browser changes only two traits, `col_merged` and
+`selected`, using `model.set` + `save_changes` (the path marimo watches). Python
+observes them, applies the merges in a safe order, recomputes the header spans
+and every tile, and syncs the result back. Invalid requests are dropped and the
+true state is written back.
+
+The renderer is one CSS Grid. Header tracks size to their content (column
+labels wrap); data tracks are exactly `cell_width × cell_height`, so every tile
+is the same size whatever is merged. Each header cell is placed on grid lines
+straight from `spans.py`. Header rows and columns stay pinned while scrolling.
+
+| Module | Role |
+| --- | --- |
+| `header.py` | `HeaderNode` tree; merge / split / relabel rules |
+| `spans.py` | Grid position and span of every header cell |
+| `fields.py` | Cross-product hierarchies from fields |
+| `widget.py` | The anywidget: traits, observers, `calculate` pass |
+| `examples.py` | Development hierarchy and example SVG tiles |
+| `static/widget.js`, `widget.css` | CSS Grid renderer; no external requests |
+
+---
+
+## Run the demo
 
 ```bash
-pip install pytest
-python -m pytest multilevel_table/tests/ -v
+pip install -e . marimo
+marimo edit demo.py          # or ./demo.py with uv installed
 ```
 
-117 tests cover the tree model, the span computation (including an
-area-coverage invariant that proves the grid tiles correctly), and the widget's
-message handling and data computation.
+`demo_molab.py` is the same notebook for [molab](https://molab.marimo.io); it
+installs the package from GitHub. See `RUNNING_IN_MOLAB.md`.
 
 ---
 
-## Project layout
+## Tests and checks
 
+```bash
+pip install pytest playwright
+python -m pytest multilevel_table/tests -q        # 146 tests
+
+# Real widget.js driven against the real Python widget in headless Chromium
+python scripts/browser_check.py /tmp/mlt-check
+
+# Live round trip through a real marimo server
+marimo run demo.py --headless --port 2799 --no-token &
+python scripts/marimo_live_check.py http://localhost:2799 /tmp/mlt-live
 ```
-.
-├── pyproject.toml                  # installable package definition
-├── demo.py                         # runnable Marimo notebook
-├── README.md                       # this file
-├── HEADER_MODEL.md                 # design notes for the header model
-├── HEADER_CODE_WALKTHROUGH.md      # line-by-line walkthrough of header.py
-└── multilevel_table/
-    ├── __init__.py                 # exports H, HeaderNode, MultilevelTable
-    ├── header.py                   # tree model + operations
-    ├── spans.py                    # colspan/rowspan computation
-    ├── widget.py                   # anywidget class
-    ├── static/
-    │   ├── widget.js               # front-end renderer
-    │   └── widget.css              # styling
-    └── tests/
-        ├── test_header.py
-        ├── test_spans.py
-        └── test_widget.py
-```
+
+The last check clicks a header and a tile in a running marimo app and confirms
+the table and the downstream cell both update.
 
 ---
 
-## Deeper documentation
+## Not built yet
 
-- **`HEADER_MODEL.md`** — the concepts and rules behind the header tree, with
-  worked examples of every operation and edge case.
-- **`HEADER_CODE_WALKTHROUGH.md`** — a plain-language, section-by-section
-  explanation of `header.py`, including the Python idioms used.
-
----
-
-## What's not built yet
-
-- **Group / ungroup** — adding/removing an interior header level without
-  changing the leaf set. Deliberately parked as a secondary feature.
-- **Live-kernel round trip** — the renderer is verified in a browser against a
-  mock model, and the Python message handler is unit-tested directly, but the
-  full browser-to-Marimo-kernel comm loop is best confirmed by running
-  `demo.py` on a desktop. The logic on both sides is identical and tested; the
-  one seam not exercised by the screenshots is the live transport itself.
+- Semantic zoom (shrink row height while column headers stay full size)
+- Drag-and-drop field selector, to be designed separately
+- Row merging and group / ungroup
