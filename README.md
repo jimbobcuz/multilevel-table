@@ -10,6 +10,9 @@ col_path)` function you supply, so merged columns are recalculated as one
 summary. Click a tile to select it; the selection is available to downstream
 marimo cells.
 
+**[Open the demo in molab](https://molab.marimo.io/github/jimbobcuz/multilevel-table/blob/main/demo_standalone.py)**
+(runs in the browser; nothing to install).
+
 ![MultilevelTable running in marimo with the United Kingdom column merged](demo-screenshot.png)
 
 ---
@@ -159,8 +162,9 @@ pip install -e . marimo
 marimo edit demo.py          # or ./demo.py with uv installed
 ```
 
-`demo_molab.py` is the same notebook for [molab](https://molab.marimo.io); it
-installs the package from GitHub. See `RUNNING_IN_MOLAB.md`.
+`demo_standalone.py` is the same notebook with the package inlined, for
+[molab](https://molab.marimo.io/github/jimbobcuz/multilevel-table/blob/main/demo_standalone.py)
+or anywhere without the package installed. See `RUNNING_IN_MOLAB.md`.
 
 ---
 
